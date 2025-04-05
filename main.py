@@ -4,8 +4,9 @@ import os
 
 # ---- CONFIGURATION ----
 detained_files = ['A.xlsx', 'B.xlsx', 'C_corrected.xlsx']
-allowed_file = 'allowed_gate1.xlsx'
+log_file = 'DATA.csv'
 detained_log_file = 'detained_attempts.xlsx'
+gate2_log_file = 'allowed_gate2.xlsx'
 id_column = 'REGNO'
 override_password = "yarona2025"
 
@@ -16,115 +17,109 @@ def load_detained_ids():
     return set(all_detained[id_column].astype(str))
 
 def load_or_create_log(file_name):
-    return pd.read_excel(file_name) if os.path.exists(file_name) else pd.DataFrame(columns=[id_column])
+    if not os.path.exists(file_name):
+        return pd.DataFrame(columns=[id_column])
+    if file_name.endswith('.csv'):
+        return pd.read_csv(file_name)
+    return pd.read_excel(file_name)
 
 def save_log(df, file_name):
-    df.to_excel(file_name, index=False)
+    if file_name.endswith('.csv'):
+        df.to_csv(file_name, index=False)
+    else:
+        df.to_excel(file_name, index=False)
 
-# ---- STREAMLIT UI ----
-st.set_page_config(page_title="Gate 1 Scanner", layout="centered")
-st.title("🚪 Gate 1 - Entry Scanner")
-
-# Initialize session state
-for key, val in {
-    "student_id": "",
-    "last_status": "",
-    "last_color": "info",
-    "rejected_id": ""
-}.items():
-    if key not in st.session_state:
-        st.session_state[key] = val
-
-# Core logic to process a scan
-def process_scan():
-    student_id = st.session_state.student_id.strip()
-    if not student_id:
-        return
-
+def gate1_process(student_id):
     detained_ids = load_detained_ids()
-    allowed_df = load_or_create_log(allowed_file)
+    allowed_df = load_or_create_log(log_file)
     detained_df = load_or_create_log(detained_log_file)
 
-    # ✅ Check valid year prefixes
     if not student_id.startswith(("21", "22", "23", "24")):
-        st.session_state.last_status = f"❌ {student_id} - PASSED / (Invalid Year)"
-        st.session_state.last_color = "error"
-        st.session_state.rejected_id = student_id
-        st.session_state.student_id = ""
-        return
+        return "❌ {} - PASSED / (Invalid Year)".format(student_id), "error"
 
-    # ✅ Priority: Detained check
     if student_id in detained_ids:
-        st.session_state.last_status = f"❌ {student_id} - ACCESS DENIED (Detained)"
-        st.session_state.last_color = "error"
-        st.session_state.rejected_id = student_id
         if student_id not in detained_df[id_column].astype(str).values:
             new_entry = pd.DataFrame([{id_column: student_id}])
             detained_df = pd.concat([detained_df, new_entry], ignore_index=True)
             save_log(detained_df, detained_log_file)
-        st.session_state.student_id = ""
-        return
+        return "❌ {} - ACCESS DENIED (Detained)".format(student_id), "error"
 
-    # ⚠️ Already scanned (non-detained)
     if student_id in allowed_df[id_column].astype(str).values:
-        st.session_state.last_status = f"⚠️ {student_id} has already been scanned!"
-        st.session_state.last_color = "warning"
-        st.session_state.student_id = ""
-        return
+        return "⚠️ {} has already been scanned!".format(student_id), "warning"
 
-    # ✅ New allowed entry
-    st.session_state.last_status = f"✅ {student_id} - ACCESS GRANTED (Welcome)"
-    st.session_state.last_color = "success"
-    st.session_state.rejected_id = ""
     new_entry = pd.DataFrame([{id_column: student_id}])
     allowed_df = pd.concat([allowed_df, new_entry], ignore_index=True)
-    save_log(allowed_df, allowed_file)
-    st.session_state.student_id = ""
+    save_log(allowed_df, log_file)
+    return "✅ {} - ACCESS GRANTED (Welcome)".format(student_id), "success"
 
-# Input field with live clearing
-st.text_input(
-    "🔍 Scan or Enter REGNO",
-    key="student_id",
-    on_change=process_scan
-)
+def gate2_process(student_id):
+    allowed_df = load_or_create_log(log_file)
+    gate2_df = load_or_create_log(gate2_log_file)
 
-# Feedback Message (sticky)
-if st.session_state.last_status:
-    match st.session_state.last_color:
-        case "success":
-            st.success(st.session_state.last_status)
-        case "warning":
-            st.warning(st.session_state.last_status)
-        case "error":
-            st.error(st.session_state.last_status)
-        case _:
-            st.info(st.session_state.last_status)
+    if student_id not in allowed_df[id_column].astype(str).values:
+        return "❌ {} - BLOCKED (Not Cleared at Gate 1)".format(student_id), "error"
 
-# 🔓 Allow Anyway Override
-if (
-    st.session_state.last_color == "error"
-    and st.session_state.rejected_id
-):
-    with st.expander("🔓 Override Access with Password"):
-        password = st.text_input("Enter override password", type="password", key="override_pw")
-        if st.button("Allow Anyway"):
-            if password == override_password:
-                allowed_df = load_or_create_log(allowed_file)
-                student_id = st.session_state.rejected_id
-                new_entry = pd.DataFrame([{id_column: student_id}])
-                allowed_df = pd.concat([allowed_df, new_entry], ignore_index=True)
-                save_log(allowed_df, allowed_file)
-                st.session_state.last_status = f"✅ {student_id} - ACCESS GRANTED (Manually Overridden)"
-                st.session_state.last_color = "success"
-                st.session_state.rejected_id = ""
-            else:
-                st.error("Incorrect password.")
+    if student_id in gate2_df[id_column].astype(str).values:
+        return "⚠️ {} has already entered through Gate 2!".format(student_id), "warning"
 
-# View logs
-with st.expander("📂 View Current Logs"):
-    if os.path.exists(allowed_file):
-        st.subheader("✅ Allowed Entries")
-        st.dataframe(pd.read_excel(allowed_file))
-    if os.path.exists(detained_log_file):
-        st.subheader("❌ Detained Attempts")
-        st.dataframe(pd.read_excel(detained_log_file))
+    new_entry = pd.DataFrame([{id_column: student_id}])
+    gate2_df = pd.concat([gate2_df, new_entry], ignore_index=True)
+    save_log(gate2_df, gate2_log_file)
+    return "✅ {} - FINAL ACCESS GRANTED".format(student_id), "success"
+
+# ---- STREAMLIT UI ----
+st.set_page_config(page_title="Gate Scanner", layout="centered")
+st.title("🎫 Multi-Gate Entry Scanner")
+
+gate = st.radio("Select Gate", ["Gate 1", "Gate 2"])
+
+if gate == "Gate 1":
+    st.header("🚪 Gate 1 - Entry Scanner")
+    student_id = st.text_input("🔍 Scan or Enter REGNO", key="gate1_input")
+
+    if student_id:
+        status, color = gate1_process(student_id.strip())
+        match color:
+            case "success": st.success(status)
+            case "warning": st.warning(status)
+            case "error": st.error(status)
+            case _: st.info(status)
+
+        # Override option
+        if "ACCESS DENIED" in status:
+            with st.expander("🔓 Override Access with Password"):
+                password = st.text_input("Enter override password", type="password")
+                if st.button("Allow Anyway"):
+                    if password == override_password:
+                        allowed_df = load_or_create_log(log_file)
+                        new_entry = pd.DataFrame([{id_column: student_id}])
+                        allowed_df = pd.concat([allowed_df, new_entry], ignore_index=True)
+                        save_log(allowed_df, log_file)
+                        st.success(f"✅ {student_id} - ACCESS GRANTED (Manually Overridden)")
+                    else:
+                        st.error("Incorrect password.")
+
+    with st.expander("📂 View Logs"):
+        if os.path.exists(log_file):
+            st.subheader("✅ Allowed Entries")
+            st.dataframe(load_or_create_log(log_file))
+        if os.path.exists(detained_log_file):
+            st.subheader("❌ Detained Attempts")
+            st.dataframe(load_or_create_log(detained_log_file))
+
+else:
+    st.header("🚧 Gate 2 - Final Checkpoint")
+    student_id_gate2 = st.text_input("🔍 Scan or Enter REGNO", key="gate2_input")
+
+    if student_id_gate2:
+        status, color = gate2_process(student_id_gate2.strip())
+        match color:
+            case "success": st.success(status)
+            case "warning": st.warning(status)
+            case "error": st.error(status)
+            case _: st.info(status)
+
+    with st.expander("📂 View Gate 2 Logs"):
+        if os.path.exists(gate2_log_file):
+            st.subheader("✅ Students Entered through Gate 2")
+            st.dataframe(load_or_create_log(gate2_log_file))
